@@ -289,6 +289,44 @@ journalctl -u gemini-proxy -n 30
 ss -tlnp | grep 9998
 ```
 
+**Error 400 "User location is not supported for the API use"**
+
+Google Gemini API tidak tersedia di semua negara. Error ini muncul karena **IP server** berada di negara yang tidak didukung (China, beberapa negara Timur Tengah, dll) — bukan masalah API key.
+
+Solusi: routing request proxy melalui outbound HTTP/SOCKS5 proxy. Python `urllib` sudah support ini via env var `HTTPS_PROXY`.
+
+```bash
+# Tambahkan ke /opt/gemini-proxy/.env
+sudo nano /opt/gemini-proxy/.env
+
+# HTTP proxy:
+HTTPS_PROXY=http://proxy-host:port
+
+# SOCKS5 proxy (butuh pysocks: pip3 install pysocks):
+HTTPS_PROXY=socks5://user:pass@proxy-host:port
+```
+
+Lalu tambahkan ke systemd service dan restart:
+```bash
+# Edit service
+sudo sed -i '/\[Service\]/a Environment=HTTPS_PROXY=http://proxy-host:port' \
+  /etc/systemd/system/gemini-proxy.service
+
+sudo systemctl daemon-reload
+sudo systemctl restart gemini-proxy
+```
+
+Verifikasi berhasil:
+```bash
+curl -s http://127.0.0.1:9998/v1/chat/completions \
+  -H "Authorization: Bearer YOUR_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"model":"gemini-2.5-flash","messages":[{"role":"user","content":"hi"}],"max_tokens":5}'
+# Harus return HTTP 200, bukan 400
+```
+
+> **Solusi termudah:** Gunakan server di negara yang didukung (US, Singapore, EU, dll).
+
 ---
 
 ## Cara Pakai (Umum)
