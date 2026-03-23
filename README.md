@@ -337,6 +337,36 @@ systemctl restart gemini-proxy
 
 ---
 
+## Ganti API Key
+
+Gunakan subcommand `update-key` — otomatis update semua lokasi (proxy, openclaw.json, auth-profiles).
+
+### Via argument
+```bash
+sudo bash install.sh update-key AIzaSyNEW_KEY_HERE
+```
+
+### Via pipe (untuk script otomatis)
+```bash
+echo "AIzaSyNEW_KEY_HERE" | sudo bash install.sh update-key
+```
+
+### Interactive
+```bash
+sudo bash install.sh update-key
+# → akan minta input API key
+```
+
+Yang diupdate otomatis:
+- `/opt/gemini-proxy/.env`
+- `/etc/systemd/system/gemini-proxy.service`
+- `~/.openclaw/openclaw.json` (semua user)
+- `~/.openclaw/agents/*/agent/auth-profiles.json` (semua agent)
+
+Setelah update, proxy di-restart otomatis.
+
+---
+
 ## Manajemen Service
 
 ```bash
