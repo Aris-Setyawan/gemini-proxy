@@ -4,6 +4,7 @@ Google Gemini OpenAI-Compatible Proxy
 
 Forwards OpenAI-format requests to Google Gemini API.
 Strips unsupported parameters automatically.
+Returns clean JSON errors instead of binary gzip responses.
 
 Usage:
     python3 proxy.py
@@ -11,7 +12,7 @@ Usage:
 Environment variables:
     PROXY_PORT      Port to listen on (default: 9998)
     PROXY_HOST      Host to bind (default: 127.0.0.1)
-    GOOGLE_BASE     Google API base URL (default: generativelanguage.googleapis.com)
+    GOOGLE_BASE     Google API base URL (default: https://generativelanguage.googleapis.com/v1beta/openai)
 """
 
 import http.server
@@ -47,13 +48,17 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         if payload:
             model = payload.get("model", "?")
             stripped = [p for p in STRIP_PARAMS if p in payload]
-            print(f"[proxy] model={model} stripped={stripped}", flush=True)
+            has_thinking = "thinking" in payload or any(
+                isinstance(m, dict) and "thinking" in str(m)
+                for m in payload.get("messages", [])
+            )
+            print(f"[proxy] model={model} stripped={stripped} thinking={has_thinking}", flush=True)
 
             # Strip unsupported params
             for p in STRIP_PARAMS:
                 payload.pop(p, None)
 
-            # Rename max_completion_tokens → max_tokens
+            # Rename max_completion_tokens → max_tokens if needed
             if "max_completion_tokens" in payload and "max_tokens" not in payload:
                 payload["max_tokens"] = payload.pop("max_completion_tokens")
             elif "max_completion_tokens" in payload:
@@ -61,9 +66,13 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
 
             body = json.dumps(payload).encode()
 
-        url = GOOGLE_BASE + self.path
-        req = urllib.request.Request(url, data=body, method="POST")
+        # Strip /v1 prefix to avoid double path with GOOGLE_BASE
+        path = self.path
+        if path.startswith("/v1/"):
+            path = path[3:]
+        url = GOOGLE_BASE + path
 
+        req = urllib.request.Request(url, data=body, method="POST")
         for k, v in self.headers.items():
             if k.lower() not in ("host", "content-length"):
                 req.add_header(k, v)
@@ -81,14 +90,19 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
 
         except urllib.error.HTTPError as e:
             data = e.read()
+            # Decode error body (may be gzip compressed)
             try:
                 err = gzip.decompress(data).decode()
             except Exception:
                 err = data.decode(errors="replace")
-            print(f"[proxy] ERROR {e.code}: {err[:300]}", flush=True)
+            print(f"[proxy] ERROR {e.code}: {err[:200]}", flush=True)
+            # Return JSON error instead of raw binary so clients can parse it
+            err_json = json.dumps({"error": {"code": e.code, "message": err[:500]}}).encode()
             self.send_response(e.code)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(err_json)))
             self.end_headers()
-            self.wfile.write(data)
+            self.wfile.write(err_json)
 
     def do_GET(self):
         url = GOOGLE_BASE + self.path
