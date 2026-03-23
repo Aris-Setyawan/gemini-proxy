@@ -157,9 +157,93 @@ uninstall() {
     echo -e "${GREEN}[✓] Uninstall selesai${NC}"
 }
 
+update_key() {
+    # Ambil key baru dari arg, stdin (pipe), atau interactive
+    if [ -n "${2:-}" ]; then
+        NEW_KEY="$2"
+    elif [ ! -t 0 ]; then
+        read -r NEW_KEY
+    else
+        echo -e "${BOLD}Masukkan Google Gemini API Key baru:${NC}"
+        echo -e "${YELLOW}  → Dapatkan di: https://aistudio.google.com/app/apikey${NC}"
+        echo ""
+        read -rsp "  API Key baru: " NEW_KEY
+        echo ""
+    fi
+
+    if [ -z "$NEW_KEY" ]; then
+        echo -e "${RED}[✗] API key tidak boleh kosong${NC}"
+        exit 1
+    fi
+
+    echo -e "${CYAN}[→] Update API key...${NC}"
+
+    # 1. Update .env
+    if [ -f "$INSTALL_DIR/.env" ]; then
+        sed -i "s|^GEMINI_API_KEY=.*|GEMINI_API_KEY=${NEW_KEY}|" "$INSTALL_DIR/.env"
+        echo -e "${GREEN}[✓] $INSTALL_DIR/.env${NC}"
+    fi
+
+    # 2. Update systemd service Environment
+    SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
+    if [ -f "$SERVICE_FILE" ]; then
+        sed -i "s|Environment=GEMINI_API_KEY=.*|Environment=GEMINI_API_KEY=${NEW_KEY}|" "$SERVICE_FILE"
+        systemctl daemon-reload
+        systemctl restart "$SERVICE_NAME"
+        echo -e "${GREEN}[✓] systemd service restarted${NC}"
+    fi
+
+    # 3. Update openclaw.json (semua user yang punya file ini)
+    for OC_JSON in /root/.openclaw/openclaw.json /home/*/.openclaw/openclaw.json; do
+        [ -f "$OC_JSON" ] || continue
+        python3 -c "
+import json, sys
+path = '$OC_JSON'
+d = json.load(open(path))
+providers = d.get('models', {}).get('providers', {})
+changed = False
+for pname, pconf in providers.items():
+    if 'gemini' in pname.lower() or '9998' in str(pconf.get('baseUrl','')):
+        if pconf.get('apiKey','').startswith('AIzaSy'):
+            pconf['apiKey'] = '$NEW_KEY'
+            changed = True
+if changed:
+    json.dump(d, open(path, 'w'), indent=2)
+    print('  updated: ' + path)
+" 2>/dev/null && echo -e "${GREEN}[✓] $OC_JSON${NC}"
+    done
+
+    # 4. Update auth-profiles.json (semua agent)
+    for AUTH in /root/.openclaw/agents/*/agent/auth-profiles.json /home/*/.openclaw/agents/*/agent/auth-profiles.json; do
+        [ -f "$AUTH" ] || continue
+        python3 -c "
+import json
+path = '$AUTH'
+d = json.load(open(path))
+changed = False
+for k, v in d.get('profiles', {}).items():
+    if v.get('provider') == 'google' or 'google' in k:
+        if v.get('key','').startswith('AIzaSy') or v.get('Authorization','').startswith('Bearer AIzaSy'):
+            v['key'] = '$NEW_KEY'
+            if 'Authorization' in v:
+                v['Authorization'] = 'Bearer $NEW_KEY'
+            changed = True
+if changed:
+    json.dump(d, open(path, 'w'), indent=2)
+    print('  updated: ' + path)
+" 2>/dev/null && echo -e "${GREEN}[✓] $AUTH${NC}"
+    done
+
+    echo ""
+    echo -e "${GREEN}${BOLD}[✓] API key berhasil diupdate!${NC}"
+    echo -e "  Key baru: ${CYAN}${NEW_KEY:0:12}...${NC}"
+    echo -e "  Proxy   : systemctl status $SERVICE_NAME"
+}
+
 # Main
 case "${1:-}" in
     uninstall) check_root; uninstall ;;
+    update-key) check_root; update_key "$@" ;;
     *)
         print_banner
         check_root
